@@ -182,6 +182,7 @@
 */
 
 #define NUMBER_TYPE_INTERNATIONAL		0x91
+#define NUMBER_TYPE_ALPHANUMERIC		0xD0
 
 /* Message Type Indicator Parameter */
 #define PDUTYPE_MTI_SHIFT			0
@@ -406,7 +407,7 @@ static int pdu_parse_byte(char ** digits2hex, size_t * length)
 }
 
 /*!
- * \brief Store number in PDU 
+ * \brief Store number in PDU
  * \param buffer -- pointer to place where number will be stored, CALLER MUST be provide length + 2 bytes of buffer
  * \param number -- phone number w/o leading '+'
  * \param length -- length of number
@@ -430,22 +431,21 @@ static int pdu_store_number(char* buffer, const char* number, unsigned length)
 	return i;
 }
 
-/*
-failed parse 07 91  97 62 02 00 01 F9  44  14 D0 F7 FB DD D5 2E 9F C3 E6 B7 1B  0008117050815073618C0500037A020100680066006C0067006800200066006800670020006800640066006A006C006700680066006400680067000A002F00200415043604350434043D04350432043D044B04390020043B04380447043D044B043900200433043E0440043E0441043A043E043F003A0020002A003500300035002300360023002000200028003300200440002F0441 
+unsigned char hex2dec(char c) {
+	return c - ((c < 'A') ? '0' : 'A'-10);
+}
 
-                                              ^^  not a international format
-failed parse 07 91  97 30 07 11 11 F1  04  14 D0 D9B09B5CC637DFEE721E0008117020616444617E041A043E04340020043F043E04340442043204350440043604340435043D0438044F003A00200036003900320037002E0020041D0438043A043E043C04430020043D043500200441043E043E043104490430043904420435002C002004320432043504340438044204350020043D0430002004410430043904420435002E 
-                                              ^^  not a international format
-*/
 #/* reverse of pdu_store_number() */
 static int pdu_parse_number(char ** pdu, size_t * pdu_length, unsigned digits, int * toa, char * number, size_t num_len)
 {
 	const char * begin;
+	char * numbegin;
 
 	if(num_len < digits + 1)
 		return -ENOMEM;
 
 	begin = *pdu;
+	numbegin = number;
 	*toa = pdu_parse_byte(pdu, pdu_length);
 	if(*toa >= 0)
 	{
@@ -458,11 +458,16 @@ static int pdu_parse_number(char ** pdu, size_t * pdu_length, unsigned digits, i
 			for(; syms > 0; syms -= 2, *pdu += 2, *pdu_length -= 2)
 			{
 				digit = pdu_code2digit(pdu[0][1]);
+				if(*toa == NUMBER_TYPE_ALPHANUMERIC)
+					digit = pdu[0][1];
 				if(digit <= 0)
 					return -1;
+
 				*number++ = digit;
 
 				digit = pdu_code2digit(pdu[0][0]);
+				if(*toa == NUMBER_TYPE_ALPHANUMERIC)
+					digit = pdu[0][0];
 				if(digit < 0 || (digit == 0 && (syms != 2 || (digits & 0x1) == 0)))
 					return -1;
 
@@ -470,6 +475,29 @@ static int pdu_parse_number(char ** pdu, size_t * pdu_length, unsigned digits, i
 			}
 			if((digits & 0x1) == 0)
 				*number = 0;
+
+			if(*toa == NUMBER_TYPE_ALPHANUMERIC) {
+				char *newnumber = malloc(digits);
+				unsigned char d = 0, b = 0, i= 0, j = 0;
+				while (j < digits) {
+					unsigned char bt = (hex2dec(numbegin[j+1]) << 4) | hex2dec(numbegin[j]);
+					char c = ((bt & ((1 << 7-d)-1)) << d) | b;
+					b = bt >> (7-d);
+					newnumber[i] = c;
+					i++; d++;
+					if (d == 7) {
+						newnumber[i] = b;
+						d = 0; b = 0;
+						i++;
+					}
+					j+=2;
+				}
+				newnumber[i] = 0;
+				strcpy(numbegin, newnumber);
+				free(newnumber);
+			}
+
+
 			return *pdu - begin;
 		}
 	}
